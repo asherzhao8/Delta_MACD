@@ -13,6 +13,7 @@ MONEY = 1e8   #初始资金
 N1 = 12       #短均线窗口
 N2 = 26       #长均线窗口
 N3 = 9        #DEA线窗口
+index_point = 300
 path_index = 'D:/index/'
 path_IC = 'D:/IC/'
 
@@ -36,14 +37,17 @@ idx = list(map(lambda x: x if x.strftime('%H:%M') in ['10:30', '11:30', '14:00',
 data_1h = data_5min[list(filter(None, idx))]    # 将5min数据转换为小时数据
 
 
-#--IC2006分钟最新价
+#--IC2006分钟最新价，例9:35表示9:35:00的价格
 dates = trade_days_query(start_date, end_date).get_trade_days()
 indexdata = pd.Series()
 for today in dates:
     index_data = pd.read_csv(path_IC + 'IC2006_' + today.replace('-','') + '.csv', index_col=0)
     index_data.index = pd.to_datetime(index_data.dataDate + ' ' + index_data.dataTime)
-    index_data = index_data['lastPrice'].resample('1min', label='right').ohlc().dropna()['close']
-    indexdata = pd.concat([indexdata, index_data])
+    temp = index_data['lastPrice'].resample('1min', label='left').ohlc().dropna()['close']
+    t = pd.to_datetime(today + ' ' + '11:30')    #若无11:30:00及以后的价格，则用11:29内的最新价
+    temp[t] = index_data['lastPrice'][:t][-1]
+    temp.sort_index(inplace=True)
+    indexdata = pd.concat([indexdata, temp])
 
 
 def cal_EMA(price, n):
@@ -90,15 +94,21 @@ def trade_records(today):
     '''
     data_today = data[data.dataDate == today]['closePrice']                          # T期分钟数据
     entry_time = [pd.to_datetime(today + ' ' + '09:00:00')]                          # 记录入场时间
-    money_remain = [MONEY]                                                           # 剩余现金
-    shares = [0]                                                                     # 仓位，正数表多仓，负数表空仓
-    money = [MONEY]                                                                  # 投资组合价值
+    money_remain = [MONEY]
+    shares = [0]
+    money = [MONEY]
+    index_price_list = []
     for i in range(len(data_today)):                                                 # T期每分钟计算一次MACD
         time = data_today.index[i]
         close = data_today[i]
+        try:
+            index_price = indexdata[time]
+        except:
+            index_price = index_price_list[-1]                                       # 若某分钟无期货最新价，则取前一非空数据代替
+        index_price_list.append(index_price)  
         flag = 1                                                                     # 标记入场日
         MACD_1d_now = refresh_MACD(data_1d[:time][-200:-1], close)                   # T期实时日频MACD (只取长度为200的序列计算小时ema(小数点后5位数一致))
-        MACD_1h_now = refresh_MACD(data_1h[:time][-200:], close)                   # T期实时小时MACD
+        MACD_1h_now = refresh_MACD(data_1h[:time][-200:], close)                     # T期实时小时MACD
 
         #--判断是否入场
         if (MACD_1d_now > 0) and (MACD_1h_now > 0):
@@ -109,19 +119,23 @@ def trade_records(today):
                 MACD_5min_yes = cal_MACD(data_5min[:time][-200:], N1, N2, N3)[-1]             # T期计算第一个的MACD需和T-1期的MACD作比较
             if (MACD_5min_yes < 0) and (MACD_5min_now > 0):                          # 5分钟金叉
                 flag = 0
-                index_price = indexdata[time]
                 if shares[-1] < 0:   # 在金叉出现的前五分钟内出现过死叉，先平多仓，再建空仓
-                    money_today = money_remain[-1] + shares[-1] * index_price * 200
-                    shares.append(int(money_today / index_price / 200))
+                    money_today = money_remain[-1] + shares[-1] * index_price * index_point
+                    shares.append(int(money_today / index_price / index_point))
                     entry_time.append(time)
-                    money_remain.append(money_today - shares[-1] * index_price * 200)
-                    money.append(money_remain[-1] + shares[-1] * index_price * 200)
+                    money_remain.append(money_today - shares[-1] * index_price * index_point)
+                    money.append(money_remain[-1] + shares[-1] * index_price * index_point)
+                elif shares[-1] > 0:   # 在金叉出现的前五分钟内出现过金叉，保持仓位不变并延长持有时间
+                    shares.append(shares[-1])
+                    entry_time.append(time)
+                    money_remain.append(money_remain[-1])
+                    money.append(money_remain[-1] + shares[-1] * index_price * index_point)
                 else:
                     money_today = money[-1]
-                    shares.append(int(money_today / index_price / 200))
+                    shares.append(int(money_today / index_price / index_point))
                     entry_time.append(time)
-                    money_remain.append(money_today - shares[-1] * index_price * 200)
-                    money.append(money_remain[-1] + shares[-1] * index_price * 200)
+                    money_remain.append(money_today - shares[-1] * index_price * index_point)
+                    money.append(money_remain[-1] + shares[-1] * index_price * index_point)
 
         elif (MACD_1d_now < 0) and (MACD_1h_now < 0):                                                        
             MACD_5min_now = refresh_MACD(data_5min[:time][-200:], close)
@@ -131,45 +145,45 @@ def trade_records(today):
                 MACD_5min_yes = cal_MACD(data_5min[:time][-200:], N1, N2, N3)[-1]             
             if (MACD_5min_yes > 0) and (MACD_5min_now < 0):                          # 5分钟死叉
                 flag = 0
-                index_price = indexdata[time]
                 if shares[-1] > 0:   # 在死叉出现的前五分钟内出现过金叉，先平空仓，再建多仓
-                    money_today = money_remain[-1] + shares[-1] * index_price * 200
-                    shares.append(int(money_today / index_price / 200))
+                    money_today = money_remain[-1] + shares[-1] * index_price * index_point
+                    shares.append(int(money_today / index_price / index_point))
                     entry_time.append(time)
-                    money_remain.append(money_today - shares[-1] * index_price * 200)
-                    money.append(money_remain[-1] + shares[-1] * index_price * 200)
+                    money_remain.append(money_today - shares[-1] * index_price * index_point)
+                    money.append(money_remain[-1] + shares[-1] * index_price * index_point)
+                elif shares[-1] < 0:   # 在死叉出现的前五分钟内出现过死叉，保持仓位不变并延长持有时间
+                    shares.append(shares[-1])
+                    entry_time.append(time)
+                    money_remain.append(money_remain[-1])
+                    money.append(money_remain[-1] + shares[-1] * index_price * index_point)
                 else:
                     money_today = money[-1]
-                    shares.append(- int(money_today / index_price / 200))
+                    shares.append(- int(money_today / index_price / index_point))
                     entry_time.append(time)
-                    money_remain.append(money_today - shares[-1] * index_price * 200)
-                    money.append(money_remain[-1] + shares[-1] * index_price * 200)
+                    money_remain.append(money_today - shares[-1] * index_price * index_point)
+                    money.append(money_remain[-1] + shares[-1] * index_price * index_point)
         else:
             pass
 
         #--判断是否出场            
         time_after_5min = entry_time[-1] + timedelta(minutes=5)
-        if time_after_5min > pd.to_datetime(today + ' ' + '11:30:00'):                    # 11:30后的时间从13:00计起
+        if (time_after_5min > pd.to_datetime(today + ' ' + '11:30:00')) and (time_after_5min < pd.to_datetime(today + ' ' + '13:00:00')):  # 11:30至13:00的时间需做调整
             time_after_5min = time_after_5min - pd.to_datetime(today + ' ' + '11:30:00') + pd.to_datetime(today + ' ' + '13:00:00')
         else:
             pass
-        
+
         if time_after_5min == time:                                                       # 入场5分钟后出场
-            money.append(shares[-1] * indexdata[time] * 200 + money_remain[-1])
-            shares.append(0)
-            money_remain.append(money[-1])
-        elif (time == pd.to_datetime(today + ' ' + '11:30:00')) and (shares[-1] != 0):    # 上午收盘时清仓
-            money.append(shares[-1] * indexdata[time] * 200 + money_remain[-1])
+            money.append(shares[-1] * index_price * index_point + money_remain[-1])
             shares.append(0)
             money_remain.append(money[-1])
         elif (time == pd.to_datetime(today + ' ' + '15:00:00')) and (shares[-1] != 0):    # 下午收盘时清仓
-            money.append(shares[-1] * indexdata[time] * 200 + money_remain[-1])
+            money.append(shares[-1] * index_price * index_point + money_remain[-1])
             shares.append(0)
             money_remain.append(money[-1])
         elif flag:                                                                        # 未达入出场条件
             shares.append(shares[-1])
             money_remain.append(money_remain[-1])   
-            money.append(shares[-1] * indexdata[time] * 200 + money_remain[-1])
+            money.append(shares[-1] * index_price * index_point + money_remain[-1])
         else:
             pass
     
