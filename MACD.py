@@ -14,6 +14,7 @@ MONEY = 1e8          # 初始资金
 N1 = 12              # 短均线窗口
 N2 = 26              # 长均线窗口
 N3 = 9               # DEA线窗口
+m = 2                # 产生信号后m秒进行交易
 index_point = 200    # 指数期货合约乘数
 path_index = 'D:/index/'
 path_IC = 'D:/IC/'
@@ -38,17 +39,13 @@ idx = list(map(lambda x: x if x.strftime('%H:%M') in ['10:30', '11:30', '14:00',
 data_1h = data_5min[list(filter(None, idx))]    # 将5min数据转换为小时数据
 
 
-#--IC2006分钟最新价，例9:35表示9:35:59的价格（即在产生信号的分钟内的最后一秒交易）
+#--IC2006分钟最新价
 dates = trade_days_query(start_date, end_date).get_trade_days()
 indexdata = pd.Series()
 for today in dates:
     index_data = pd.read_csv(path_IC + 'IC2006_' + today.replace('-','') + '.csv', index_col=0)
     index_data.index = pd.to_datetime(index_data.dataDate + ' ' + index_data.dataTime)
-    temp = index_data['lastPrice'].resample('1min', label='left').ohlc().dropna()['close']
-    t = pd.to_datetime(today + ' ' + '11:30')    # 若无11:30:00及以后的价格，则用11:29内的最新价
-    temp[t] = index_data['lastPrice'][:t][-1]
-    temp.sort_index(inplace=True)
-    indexdata = pd.concat([indexdata, temp])
+    indexdata = pd.concat([indexdata, index_data['lastPrice']])
 
 
 def cal_EMA(price, n):
@@ -97,15 +94,10 @@ def trade_records(today):
     money_remain = [MONEY]
     shares = [0]
     money = [MONEY]
-    index_price_list = []
     for i in range(len(data_today)):                                                 # T期每分钟计算一次MACD
         time = data_today.index[i]
         close = data_today[i]
-        try:
-            index_price = indexdata[time]
-        except:
-            index_price = index_price_list[-1]
-        index_price_list.append(index_price)
+        index_price = indexdata[: (time + timedelta(seconds=m))][-1]                 # 取当前最新价，若取不到则取距此刻最新的价格
         flag = 1                                                                     # 标记入场日
         MACD_1d_now = refresh_MACD(data_1d[:time][-200:-1], close)                   # T期实时日频MACD (只取长度为200的序列计算小时ema(小数点后5位数一致))
         MACD_1d_yes = cal_MACD(data_1d[:time][-200:-1], N1, N2, N3)[-1]              # 前一周期的MACD
