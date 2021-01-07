@@ -105,7 +105,7 @@ def trade_records(today):
         MACD_1h_yes = cal_MACD(data_1h[:time][-200:], N1, N2, N3)[-1]                # 前一周期的MACD
 
         #--判断是否入场(开盘收盘时刻不入场)
-        if time not in [pd.to_datetime(today + ' ' + '09:30:00'), pd.to_datetime(today + ' ' + '11:30:00'), pd.to_datetime(today + ' ' + '15:00:00')]:
+        if time not in [pd.to_datetime(today + ' ' + '09:30:00'), pd.to_datetime(today + ' ' + '13:00:00'), pd.to_datetime(today + ' ' + '11:30:00'), pd.to_datetime(today + ' ' + '15:00:00')]:
             if (MACD_1d_now -  MACD_1d_yes > 0) and (MACD_1h_now - MACD_1h_yes > 0):
                 MACD_5min_now = refresh_MACD(data_5min[:time][-200:], close)
                 if i:
